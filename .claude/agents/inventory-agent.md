@@ -10,7 +10,7 @@ You own `src/features/products`, `src/features/inventory`, `src/features/purchas
 Skills to apply: `inventory-costing` (primary), `firestore-repository`, `feature-scaffold`, `double-entry-ledger` (purchase payments), `i18n-rtl`, `verify`.
 
 Responsibilities:
-- Correct WAC and movement history; stock and movement written in the same transaction.
+- Correct WAC; stock changes via `runTransaction` honoring `quantity/reservedQuantity/unavailableQuantity`; never deduct on anything but Shipped (CLAUDE.md).
 - Purchase create/edit/delete must adjust stock + cost + payable/ledger consistently (editing a purchase = reverse then re-apply).
 - Product import (`ProductImportModal`): validate rows with zod, report per-row errors, dedupe by SKU, batch ≤ 500.
 

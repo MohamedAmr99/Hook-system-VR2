@@ -1,18 +1,19 @@
 ---
 name: verify
-description: Use before declaring any change in this project done — runs type check, lint and build and reports real results.
+description: Use before declaring any change in this project done: runs tests, lint and the type-checked build and reports real results.
 ---
 
 # Verify
 
-Run from the repo root, in order, and report actual output (don't claim success without it):
+From the repo root, in order; report actual output, never assume success:
 
 ```bash
+npm test          # vitest run (shared/utils tests)
 npm run lint
-npm run build      # tsc -b && vite build
+npm run build     # tsc -b && vite build
 ```
 
-- Files with `// @ts-nocheck` hide type errors; if you edited one, say so.
-- If the change touched UI, start `npm run dev` and check the page in both `ar` (RTL) and `en`.
-- If it touched money/stock, walk one example by hand (see `inventory-costing`, `double-entry-ledger`) and state the numbers.
-- Pre-existing failures: separate them from ones you introduced.
+- `@ts-nocheck` files (`repository.ts`, `order.service.ts`, `useStore.ts`, ...) hide type errors: say so if you edited one.
+- UI change: run `npm run dev` and check in RTL Arabic.
+- Money/stock change: add or update a vitest test and give one worked numeric example.
+- Separate pre-existing failures from ones you introduced.

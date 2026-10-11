@@ -1,16 +1,18 @@
 ---
 name: i18n-rtl
-description: Use when adding or changing any user-facing text, labels, forms, tables or layout in this project — Arabic/English translations and RTL support.
+description: Use when adding or changing any user-facing text, labels, forms, tables, toasts or layout in this project: Arabic RTL UI and the i18n locale files.
 ---
 
 # i18n & RTL
 
-- Locales: `src/lib/i18n/locales/ar.json` and `en.json`, config in `src/lib/i18n/config.ts` (fallback `en`).
-- Never hardcode UI strings. Use `const { t } = useTranslation()` and keys grouped by feature (`orders.title`, `common.save`). Add the key to BOTH files in the same change; after editing, diff the key sets of the two files and fix mismatches.
-- Interpolation: `t("orders.count", { count })`; don't concatenate translated fragments.
-- Direction: set `dir` on `<html>` from the active language. Use logical Tailwind utilities (`ms-*`, `me-*`, `ps-*`, `pe-*`, `text-start`, `start-*`) instead of `ml/mr/pl/pr/left/right`. Flip directional icons (chevrons, arrows) with `rtl:rotate-180`.
-- Numbers/currency/dates: format with `Intl.NumberFormat`/`Intl.DateTimeFormat` using the active locale; keep SKUs, order IDs and emails `dir="ltr"` inside RTL text.
-- Tables (`DataTable`) and charts (recharts) need explicit RTL checks: column order, tooltip alignment, axis orientation.
-- Zod/validation messages and toast (`sonner`) messages are user-facing too — translate them.
+Project rule (CLAUDE.md): **all user-facing text is Arabic, RTL.** Code, comments, identifiers and commits are English.
 
-Done = both locales updated, page checked in `ar` (RTL) and `en`.
+- Locale files: `src/lib/i18n/locales/ar.json` (primary) and `en.json` (kept in sync as fallback; fallbackLng is `en`). Config: `src/lib/i18n/config.ts`.
+- New UI text -> `t("feature.key")` via `useTranslation()`, Arabic string in `ar.json` and a matching key in `en.json`. Diff the key sets after editing; they already drift (en ~362 lines vs ar ~373). Don't make it worse, fix drift you touch.
+- Many places still hardcode Arabic strings (e.g. errors in `orders/services/inventory.service.ts`, toasts). Moving them to `t()` is welcome when you touch the file; don't mass-refactor unrelated files.
+- Services are not React: for user-facing errors thrown from services, keep Arabic text short and consistent, or throw a code and map it in the UI.
+- Layout: logical Tailwind utilities (`ms-/me-/ps-/pe-/text-start/start-0`), not `ml/mr/pl/pr/left/right`; flip directional icons with `rtl:rotate-180`. Ensure `<html dir="rtl" lang="ar">`.
+- Keep SKUs, order IDs, ASINs, emails and numbers in `dir="ltr"` spans. Format money/dates with `Intl.*` and `ar-EG`.
+- Tables (`DataTable`) and recharts need an explicit RTL check (column order, tooltip, axis).
+
+Done = both locale files updated, page checked visually in RTL.

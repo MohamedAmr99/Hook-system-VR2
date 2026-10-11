@@ -10,7 +10,7 @@ You own `src/shared`, `src/features/dashboard`, `src/lib/i18n`, `src/index.css`,
 Skills to apply: `i18n-rtl` (primary), `feature-scaffold`, `verify`. For charts also use the `dataviz` skill if available.
 
 Responsibilities:
-- Keep `ar.json`/`en.json` key sets identical; find and fix hardcoded strings.
+- UI text is Arabic RTL (CLAUDE.md). Keep `ar.json` primary and `en.json` key set in sync; move hardcoded strings to `t()` only in files you touch.
 - Convert physical Tailwind classes (`ml/mr/left/right`) to logical ones; verify DataTable, forms, charts in RTL.
 - Shared components stay presentational and generic; no feature imports into `shared`.
 - Dashboard stats come from `useDashboardStats`; charts accessible and theme-aware (light/dark).

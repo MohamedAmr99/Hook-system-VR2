@@ -1,21 +1,14 @@
 ---
 name: firestore-repository
-description: Use when adding or changing Firestore data access in this project — new collections, repositories, queries, batched/atomic writes, or React Query hooks over them.
+description: Use when adding or changing Firestore data access in this project: new collections, repositories, queries, transactions, or React Query/Zustand wiring over them.
 ---
 
-# Firestore repositories
+# Firestore access
 
-1. Create `features/<f>/repositories/<name>.repository.ts`:
-   ```ts
-   export class XRepository extends BaseRepository<X> { constructor(){ super("xCollection"); } }
-   export const xRepository = new XRepository();
-   ```
-   Types in `features/<f>/types`, zod schema in `schemas/` (validate at the form boundary, not in the repo).
-2. Timestamps are `number` (`Date.now()`), not Firestore `Timestamp`. Money is a plain number rounded to 2 dp at the service layer.
-3. **Multi-document changes must be atomic**: use `writeBatch(db)` or `runTransaction`, never sequential `create()` calls in a loop (see `ledger.service.ts` for the batch pattern). Reads that feed a write (stock level, balance) go inside a transaction.
-4. Queries: `getAll([where(...), orderBy(...)])`. If a compound query needs an index, add it to `firestore.indexes.json` and mention it.
-5. UI access: wrap service calls in TanStack Query hooks (`hooks/useX.ts`); invalidate related keys after mutations (orders → products, inventory, dashboard stats).
-6. Never import `firebase/firestore` in pages/components.
-7. When touching `BaseRepository` or any `@ts-nocheck` file, prefer removing the nocheck and typing properly.
-
-Verify with `npm run build`.
+1. Repositories: `features/<f>/repositories/<name>.repository.ts` extending `BaseRepository<T>` (`src/lib/firebase/repository.ts`, currently `@ts-nocheck`; type it when you touch it). Services call repositories; pages call services/hooks. No `firebase/firestore` imports in pages/components.
+2. Timestamps are `number` (`Date.now()`); money is a number rounded to 2 dp in services.
+3. **Transactions**: any read-then-write (stock, balances, state transitions) uses `runTransaction` with all reads first; pure multi-doc writes use `writeBatch` (max 500 ops). See `orders/services/inventory.service.ts`. Don't swallow errors with `.catch(() => {})`.
+4. **Two data sources today**: some entities live in the persisted Zustand store (`shared/store/useStore.ts`, `@ts-nocheck`) while others use TanStack Query. Before changing an entity, find which one the screen reads (Grep `useStore` and `useQuery`). Server state belongs in TanStack Query; Zustand is for UI state only (CLAUDE.md). Migrating an entity off the store is a deliberate task: do the whole entity, not half.
+5. After a mutation, invalidate every dependent query (orders -> products, dashboard stats, returns).
+6. Compound queries need an index in `firestore.indexes.json`; security needs matching rules (`firebase-security` agent).
+7. No `any`; use types from `features/*/types`.

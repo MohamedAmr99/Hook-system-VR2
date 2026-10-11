@@ -1,18 +1,24 @@
 ---
 name: double-entry-ledger
-description: Use when posting or changing financial transactions, ledger entries, accounts, expenses, loans, refunds or anything that moves money in this project.
+description: Use when posting or changing financial transactions, ledger entries, accounts, expenses, loans, collections or anything that moves money in this project.
 ---
 
-# Double-entry ledger
+# Double-entry ledger & financial truth
 
-Source of truth: `features/finance/services/ledger.service.ts` and `types/finance.types.ts`.
+**Know which financial layer you are in.**
+1. **Operational/live layer**: Zustand `useStore` (orders, expenses, collections, purchases) + `calculateOrderFinancials` in `shared/utils/orderCalculations.ts`. This is what the Orders page, Returns page and Dashboard show. Profit/loss numbers must come only from this helper (single source of truth).
+2. **Ledger layer**: `features/finance/services/ledger.service.ts` (`postTransaction`), used by `purchase.service.ts` and `order.service.ts`. Grep who actually calls it before assuming it drives the UI; `OrderService.createOrder` is partly dormant (`@ts-nocheck`, placeholder stock values).
 
-- Post only through `ledgerService.postTransaction(tx, entries)`. It rejects unbalanced entries and writes transaction + entries in one `writeBatch`. Never write `ledgerEntries` directly.
-- Each entry has `debit` and `credit` (one is 0). Sum(debit) must equal Sum(credit).
-- Transaction types: `OrderSale`, `OrderRefund`, `PurchasePayment`, `MarketplaceSettlement`, `MarketplaceFee`, `ExpensePayment`, `Transfer`. Add a new type to the union before using it.
-- Standard order sale: Dr marketplace_receivable (net payout) + Dr marketplace_fees + Dr COGS ↔ Cr sales_revenue + Cr inventory asset. Refunds reverse it. Settlement: Dr Bank/Cash, Cr marketplace_receivable.
-- Never edit or delete a posted entry; correct with a reversing transaction (`referenceId` links back).
-- Account IDs are currently hardcoded strings — centralize in one constants file rather than adding more literals; look accounts up from `accounts` collection where possible.
-- Floating point: round each line to 2 dp, put any rounding remainder on the largest line so the batch balances exactly.
+Don't create a third path. New money logic = pure function in `shared/utils` (+ vitest test), wired to the layer the screen already uses.
 
-Checklist before finishing: unbalanced case throws, reversal exists for every cancel/refund path, `referenceId` set, account balances updated in the same batch.
+## Ledger rules
+- Post only via `ledgerService.postTransaction(tx, entries)`: it rejects unbalanced entries (sum debit == sum credit within 0.01) and writes in one `writeBatch`.
+- Transaction types: `OrderSale`, `OrderRefund`, `PurchasePayment`, `MarketplaceSettlement`, `MarketplaceFee`, `ExpensePayment`, `Transfer`. Extend the union first.
+- Sale: Dr receivable + fees + COGS = Cr revenue + inventory asset. Refund/return: reverse. Settlement: Dr bank/cash, Cr receivable. Corrections are reversing transactions, never edits.
+- Account IDs are hardcoded strings (`marketplace_receivable`, `sales_revenue`, `cogs`, `inventory_asset`, ...): centralize in one constants file instead of adding literals.
+- Round each line to 2 dp; push the remainder onto the largest line so it balances exactly.
+
+## Returns money
+Net return yield = compensation - customer refund - retained fees - irrecoverable COGS (damaged only). Partial returns use the returned item's `unitCogs x returned qty`, not the order total.
+
+Show a worked numeric example when you change a formula, and cover it with a test.
