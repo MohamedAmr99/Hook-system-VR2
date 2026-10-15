@@ -236,3 +236,44 @@ export const ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
 export function canTransition(from: OrderStatus, to: OrderStatus): boolean {
   return ALLOWED_TRANSITIONS[from]?.includes(to) ?? false;
 }
+
+const LEGACY_RETURN_STATUSES: readonly OrderStatus[] = [
+  "Returned",
+  "ReturnedToSeller",
+  "ReturningToSeller",
+  "RejectedByBuyer",
+];
+
+/** Arabic message shown when a status change is rejected because the order has a return. */
+export const ORDER_HAS_RETURN_STATUS_ERROR = "لا يمكن تغيير حالة طلب له مرتجع";
+
+/**
+ * True when the order has (or had) a return. Single predicate used by the orders list badge,
+ * the status cell and the order form.
+ * Sources: the denormalized `hasReturn`/`returnCount`, a real return document for the order
+ * (fabricated `ret-` placeholders built from legacy order fields are ignored), or legacy
+ * return statuses / `returnStatus`.
+ */
+export function orderHasReturn(
+  order: Pick<Order, "id" | "status" | "hasReturn" | "returnCount" | "returnStatus">,
+  returns: ReadonlyArray<Pick<Return, "id" | "orderId">> = [],
+): boolean {
+  if (order.hasReturn === true) return true;
+  if (typeof order.returnCount === "number" && order.returnCount > 0) return true;
+  if (returns.some((r) => r.orderId === order.id && !r.id.startsWith("ret-"))) return true;
+  if (LEGACY_RETURN_STATUSES.includes(order.status)) return true;
+  return Boolean(order.returnStatus && order.returnStatus !== "None");
+}
+
+/**
+ * Pure validator for status changes. Returns an Arabic error message when the change must be
+ * rejected, or null when it is allowed. Editing other fields with an unchanged status is allowed.
+ */
+export function validateOrderStatusChange(params: {
+  currentStatus: OrderStatus;
+  nextStatus: OrderStatus;
+  hasReturn: boolean;
+}): string | null {
+  if (params.currentStatus === params.nextStatus) return null;
+  return params.hasReturn ? ORDER_HAS_RETURN_STATUS_ERROR : null;
+}

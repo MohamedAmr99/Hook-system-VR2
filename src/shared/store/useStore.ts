@@ -334,96 +334,26 @@ export const useStore = create<AppState>()(
         });
       },
 
+      // Purchases in this store are a display cache only. Stock and WAC are changed atomically in
+      // Firestore by PurchaseService (features/purchases), never here.
       addPurchase: (purchase) => {
-        set((state) => {
-          const newPurchases = [...state.purchases, purchase];
-          // Local store stock update only — Firebase is handled in PurchaseForm
-          let newProducts = state.products;
-          if (purchase.status === "Received") {
-            newProducts = state.products.map(product => {
-              const purchaseItem = purchase.items.find(item => item.sku === product.sku);
-              if (purchaseItem) {
-                return { ...product, quantity: product.quantity + purchaseItem.quantity };
-              }
-              return product;
-            });
-          }
-          return { purchases: newPurchases, products: newProducts };
-        });
+        set((state) => ({ purchases: [...state.purchases, purchase] }));
       },
 
       updatePurchase: (id, data) => {
-        set((state) => {
-          const newPurchases = state.purchases.map(p => p.id === id ? { ...p, ...data } : p);
-          return { purchases: newPurchases };
-        });
+        set((state) => ({
+          purchases: state.purchases.map((p) => (p.id === id ? { ...p, ...data } : p)),
+        }));
       },
 
       updatePurchaseStatus: (id, status) => {
-        set((state) => {
-          const purchase = state.purchases.find(p => p.id === id);
-          if (!purchase) return state;
-
-          const oldStatus = purchase.status;
-          
-          const newPurchases = state.purchases.map(p => p.id === id ? { ...p, status } : p);
-          
-          let newProducts = state.products;
-          
-          // If status changes to Received, increment stock
-          if (oldStatus !== "Received" && status === "Received") {
-            newProducts = state.products.map(product => {
-              const purchaseItem = purchase.items.find(item => item.sku === product.sku);
-              if (purchaseItem) {
-                return {
-                  ...product,
-                  quantity: product.quantity + purchaseItem.quantity,
-                };
-              }
-              return product;
-            });
-          } else if (oldStatus === "Received" && status !== "Received") {
-            // Revert stock if changed from Received to something else
-            newProducts = state.products.map(product => {
-              const purchaseItem = purchase.items.find(item => item.sku === product.sku);
-              if (purchaseItem) {
-                return {
-                  ...product,
-                  quantity: Math.max(0, product.quantity - purchaseItem.quantity),
-                };
-              }
-              return product;
-            });
-          }
-
-          return { purchases: newPurchases, products: newProducts };
-        });
+        set((state) => ({
+          purchases: state.purchases.map((p) => (p.id === id ? { ...p, status } : p)),
+        }));
       },
 
       deletePurchase: (id) => {
-        set((state) => {
-          const purchase = state.purchases.find(p => p.id === id);
-          if (!purchase) return state;
-
-          const newPurchases = state.purchases.filter(p => p.id !== id);
-          let newProducts = state.products;
-
-          // Revert stock if deleting a received purchase
-          if (purchase.status === "Received") {
-            newProducts = state.products.map(product => {
-              const purchaseItem = purchase.items.find(item => item.sku === product.sku);
-              if (purchaseItem) {
-                return {
-                  ...product,
-                  quantity: Math.max(0, product.quantity - purchaseItem.quantity),
-                };
-              }
-              return product;
-            });
-          }
-
-          return { purchases: newPurchases, products: newProducts };
-        });
+        set((state) => ({ purchases: state.purchases.filter((p) => p.id !== id) }));
       },
 
       addExpense: (expense) => set((state) => ({ expenses: [...state.expenses, expense] })),

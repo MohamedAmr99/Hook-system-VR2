@@ -13,6 +13,8 @@ import { Order, OrderStatus } from "../types/order.types";
 import { usePlatforms } from "@/features/platforms/hooks/usePlatforms";
 import { Plus, Trash2, AlertCircle } from "lucide-react";
 import { createOrderAtomic, updateOrderAtomic } from "../services/inventory.service";
+import { useReturns } from "@/features/returns/hooks/useReturns";
+import { orderHasReturn } from "@/shared/utils/orderCalculations";
 
 interface OrderFormProps {
   initialData?: Order;
@@ -33,6 +35,9 @@ export function OrderForm({ initialData, onSuccess }: OrderFormProps) {
   
   const { data: products = [], isLoading: isLoadingProducts } = useProducts();
   const { data: platforms = [] } = usePlatforms();
+  const { returns } = useReturns();
+  // Status of an order with a return is locked (also enforced server-side by updateOrderAtomic).
+  const statusLocked = Boolean(initialData && orderHasReturn(initialData, returns));
   
   const [productSearch, setProductSearch] = useState<Record<number, string>>({});
   const [openDropdowns, setOpenDropdowns] = useState<Record<number, boolean>>({});
@@ -335,11 +340,21 @@ export function OrderForm({ initialData, onSuccess }: OrderFormProps) {
           {/* Order Status */}
           <div>
             <label className="block text-sm font-medium mb-1">{t("orders.form.status")}</label>
-            <select {...register("status")} className={inputCls}>
-              {ORDER_STATUSES.map(s => (
-                <option key={s} value={s}>{t(`orders.statuses.${s}`)}</option>
-              ))}
-            </select>
+            {statusLocked && initialData ? (
+              // Not registered on purpose: the form keeps the default status value untouched.
+              <>
+                <select value={initialData.status} disabled className={inputCls}>
+                  <option value={initialData.status}>{t(`orders.statuses.${initialData.status}`)}</option>
+                </select>
+                <span className="text-xs text-muted-foreground">{t("orders.statusLockedByReturn")}</span>
+              </>
+            ) : (
+              <select {...register("status")} className={inputCls}>
+                {ORDER_STATUSES.map(s => (
+                  <option key={s} value={s}>{t(`orders.statuses.${s}`)}</option>
+                ))}
+              </select>
+            )}
           </div>
 
           {/* Payment Status */}

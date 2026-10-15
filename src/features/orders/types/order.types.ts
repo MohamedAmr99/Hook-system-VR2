@@ -64,6 +64,10 @@ export interface Order {
   financialStatus: FinancialStatus;
   returnStatus?: ReturnStatus;
   returnCondition?: ReturnCondition;
+  /** Number of return documents linked to this order. Maintained by ReturnService in a transaction. */
+  returnCount?: number;
+  /** Denormalized flag: true when returnCount > 0. Undefined on legacy orders (backfill pending). */
+  hasReturn?: boolean;
 
   orderDate: number; // Unix timestamp
 
@@ -84,7 +88,12 @@ export interface Order {
   fulfillmentFees: number;
   otherFees: number;
 
-  netPayoutExpected: number; // totalRevenue - (sellingFees + fulfillmentFees + otherFees)
+  netPayoutExpected: number; // totalRevenue - (sellingFees + fulfillmentFees + otherFees). The expectation: never overwritten by settlement imports.
+
+  /** Net actually paid by the marketplace, summed from all stored settlement lines for this order. */
+  actualPayout?: number;
+  /** When the order reached financialStatus "Settled" (null when it is not fully settled). */
+  settledAt?: number | null;
 
   // Payment & Collection Tracking
   paidAmount?: number; // Actual amount collected

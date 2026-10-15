@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { Plus, Trash2, Pencil, Filter, X, UploadCloud, RefreshCw, RotateCcw, Scale } from "lucide-react";
+import { Plus, Trash2, Pencil, Filter, X, UploadCloud, Scale } from "lucide-react";
 import { Link } from "react-router-dom";
 import { ColumnDef } from "@tanstack/react-table";
 import { DataTable } from "@/shared/components/DataTable";
@@ -10,6 +10,7 @@ import { useAuthStore } from "@/features/auth/store/auth.store";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import {
+  changeOrderStatusAtomic,
   onOrderCancelled,
   onOrderDeleted,
   onOrderReactivated,
@@ -17,8 +18,10 @@ import {
 import { Button } from "@/shared/components/ui/button";
 import { cn } from "@/shared/lib/utils";
 import { OrderImportModal } from "../components/OrderImportModal";
+import { SettlementImportModal } from "@/features/settlements/components/SettlementImportModal";
 import { useOrders, deleteOrderFromFirestore, patchOrderInFirestore } from "../hooks/useOrders";
-import { calculateOrderFinancials } from "@/shared/utils/orderCalculations";
+import { calculateOrderFinancials, orderHasReturn } from "@/shared/utils/orderCalculations";
+import { toast } from "sonner";
 import { useReturns } from "@/features/returns/hooks/useReturns";
 import { ReturnCreateDialog } from "@/features/returns/components/ReturnCreateDialog";
 
@@ -47,7 +50,7 @@ function isInDateRange(dateValue: string | Date | number, range: DateFilter): bo
 
 export function OrderListPage() {
   const { t } = useTranslation();
-  const { data: orders = [], isLoading: isLoadingOrders } = useOrders();
+  const { data: orders = [] } = useOrders();
   const { returns = [] } = useReturns();
   const updateOrder = useStore(state => state.updateOrder);
   const updateOrderStatus = useStore(state => state.updateOrderStatus);
@@ -56,6 +59,7 @@ export function OrderListPage() {
   const queryClient = useQueryClient();
   const { data: products = [] } = useProducts();
   const [showImportModal, setShowImportModal] = React.useState(false);
+  const [showSettlementModal, setShowSettlementModal] = React.useState(false);
   const [selectedReturnOrder, setSelectedReturnOrder] = React.useState<Order | null>(null);
 
   // Filters
@@ -88,12 +92,17 @@ export function OrderListPage() {
     const oldStatus = order.status;
     if (oldStatus === newStatus) return;
 
-    // Update Zustand (immediate UI)
-    updateOrderStatus(order.id, newStatus);
-    // Persist to Firestore
-    patchOrderInFirestore(order.id, { status: newStatus });
-
     if (!user) return;
+
+    // Guarded Firestore write first: rejects orders with a return. Local store only after success.
+    try {
+      await changeOrderStatusAtomic({ orderId: order.id, newStatus, userId: user.uid });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t("orders.statusLockedByReturn"));
+      return;
+    }
+    updateOrderStatus(order.id, newStatus);
+
     const ctx = { order, products, userId: user.uid, userDisplayName: user.displayName ?? "System" };
 
     const wasActive = (ACTIVE_STATUSES as readonly string[]).includes(oldStatus);
@@ -195,6 +204,16 @@ export function OrderListPage() {
       header: t("orders.columns.status"),
       cell: ({ row }) => {
         const colorClass = statusColors[row.original.status] || "";
+        if (orderHasReturn(row.original, returns)) {
+          return (
+            <span
+              className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-xs font-medium cursor-not-allowed opacity-80 ${colorClass}`}
+              title={t("orders.statusLockedByReturn")}
+            >
+              {t(`orders.statuses.${row.original.status}`)}
+            </span>
+          );
+        }
         return (
           <span className={`inline-flex items-center rounded-md px-1.5 py-0.5 ${colorClass}`}>
             <select
@@ -310,8 +329,7 @@ export function OrderListPage() {
       id: "actions",
       header: t("orders.columns.actions"),
       cell: ({ row }) => {
-        const hasReturnDoc = returns.some(r => r.orderId === row.original.id);
-        const isReturnStatus = (RETURN_STATUSES as readonly string[]).includes(row.original.status) || hasReturnDoc;
+        const isReturnStatus = orderHasReturn(row.original, returns);
 
         return (
           <div className="flex items-center gap-1.5">
@@ -385,13 +403,14 @@ export function OrderListPage() {
             <Plus className="h-4 w-4" />
             {t("orders.newOrder")}
           </Link>
-          <Link
-            to="/finance/collections"
-            className="inline-flex items-center justify-center gap-1.5 rounded-md text-sm font-medium border border-border/80 hover:bg-muted h-9 px-3 transition-colors"
+          <Button
+            variant="outline"
+            className="h-9 gap-1.5 px-3 border-border/80 hover:bg-muted"
+            onClick={() => setShowSettlementModal(true)}
           >
             <Scale size={14} />
-            <span>توفيق تسوية</span>
-          </Link>
+            <span>{t("settlements.openButton")}</span>
+          </Button>
           <Button 
             variant="outline" 
             className="h-9 gap-1.5 px-3 border-border/80 hover:bg-muted"
@@ -489,6 +508,10 @@ export function OrderListPage() {
 
       {showImportModal && (
         <OrderImportModal onClose={() => setShowImportModal(false)} />
+      )}
+
+      {showSettlementModal && (
+        <SettlementImportModal onClose={() => setShowSettlementModal(false)} />
       )}
 
       {selectedReturnOrder && (

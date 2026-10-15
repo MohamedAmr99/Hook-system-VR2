@@ -1,4 +1,6 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
+import { AuthService } from "@/features/auth/services/auth.service";
+import { useAuthStore } from "@/features/auth/store/auth.store";
 import {
   LayoutDashboard,
   Package,
@@ -144,10 +146,7 @@ export function AppLayout() {
             </button>
             <button
               onClick={async () => {
-                const { AuthService } =
-                  await import("@/features/auth/services/auth.service");
-                const store = await import("@/features/auth/store/auth.store");
-                const uid = store.useAuthStore.getState().user?.uid;
+                const uid = useAuthStore.getState().user?.uid;
                 await AuthService.logout(uid);
               }}
               className="flex items-center gap-2 text-sm font-medium hover:text-destructive transition-colors text-muted-foreground"

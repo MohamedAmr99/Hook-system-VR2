@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useStore } from "@/shared/store/useStore";
-import { SettlementImportModal } from "../components/SettlementImportModal";
+import { SettlementImportModal } from "@/features/settlements/components/SettlementImportModal";
 import { Button } from "@/shared/components/ui/button";
 import {
   UploadCloud,
@@ -170,7 +170,8 @@ export function FinanceDashboardPage() {
     platformStats[p].expectedNet += Number(o.netPayoutExpected || 0);
     platformStats[p].orderCount += 1;
     if (o.financialStatus === "Settled") {
-      platformStats[p].settledNet += Number(o.netPayoutExpected || 0);
+      // actualPayout comes from settlement lines; legacy orders (pre-reconciliation import) only have netPayoutExpected.
+      platformStats[p].settledNet += Number(o.actualPayout ?? o.netPayoutExpected ?? 0);
       platformStats[p].settledCount += 1;
     }
   });

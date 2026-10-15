@@ -1,5 +1,5 @@
 import React from "react";
-import { useForm, useFieldArray } from "react-hook-form";
+import { useForm, useFieldArray, useWatch, Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { v4 as uuidv4 } from "uuid";
 import { useQueryClient } from "@tanstack/react-query";
@@ -7,15 +7,17 @@ import { useTranslation } from "react-i18next";
 import { PurchaseInput, PurchaseSchema } from "../schemas/purchase.schema";
 import { useStore } from "@/shared/store/useStore";
 import { useProducts, PRODUCT_QUERY_KEYS } from "@/features/products/hooks/useProducts";
-import { ProductService } from "@/features/products/services/product.service";
+import { PurchaseService } from "../services/purchase.service";
 import { useAuthStore } from "@/features/auth/store/auth.store";
-import { Purchase } from "../types/purchase.types";
+import { Purchase, PurchaseItem } from "../types/purchase.types";
 import { Trash2, Plus } from "lucide-react";
 
 interface PurchaseFormProps {
   initialData?: Purchase;
   onSuccess: () => void;
 }
+
+const round2 = (n: number) => Number(n.toFixed(2));
 
 const inputCls = "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:bg-muted disabled:text-muted-foreground";
 
@@ -27,13 +29,14 @@ export function PurchaseForm({ initialData, onSuccess }: PurchaseFormProps) {
   const queryClient = useQueryClient();
 
   const currency = t("orders.currency");
+  const [submitError, setSubmitError] = React.useState<string | null>(null);
 
   // Real products from Firebase
   const { data: products = [] } = useProducts();
 
   const { register, handleSubmit, control, watch, formState: { errors, isSubmitting }, setValue } =
     useForm<PurchaseInput>({
-      resolver: zodResolver(PurchaseSchema) as any,
+      resolver: zodResolver(PurchaseSchema) as Resolver<PurchaseInput>,
       defaultValues: initialData
         ? {
             supplierId: initialData.supplierId,
@@ -72,22 +75,28 @@ export function PurchaseForm({ initialData, onSuccess }: PurchaseFormProps) {
     name: "items",
   });
 
-  const watchedItems = watch("items") || [];
-  const shippingCost = watch("shippingCost") || 0;
-  const tax = watch("tax") || 0;
-  const otherExpenses = watch("otherExpenses") || 0;
-  const amountPaid = watch("amountPaid") || 0;
-  const totalCost = watch("totalCost");
+  const watchedItems = useWatch({ control, name: "items" }) || [];
+  const shippingCost = Number(useWatch({ control, name: "shippingCost" })) || 0;
+  const tax = Number(useWatch({ control, name: "tax" })) || 0;
+  const otherExpenses = Number(useWatch({ control, name: "otherExpenses" })) || 0;
+  const amountPaid = Number(useWatch({ control, name: "amountPaid" })) || 0;
+  const watchedStatus = useWatch({ control, name: "status" });
 
-  // Auto-calculate totals
+  // Totals are derived during render so they always reflect the latest qty / unit cost.
+  // `|| 0` guards NaN coming from empty number inputs (valueAsNumber).
+  const itemsSubtotal = round2(
+    watchedItems.reduce((acc, item) => acc + (Number(item?.orderedQuantity) || 0) * (Number(item?.unitCost) || 0), 0),
+  );
+  const totalCost = round2(itemsSubtotal + shippingCost + tax + otherExpenses);
+  const balanceDue = round2(totalCost - amountPaid);
+  const totalUnits = watchedItems.reduce((acc, item) => acc + (Number(item?.orderedQuantity) || 0), 0);
+
+  // Keep the numbers in form state so the submit payload carries them.
   React.useEffect(() => {
-    const itemsTotal = watchedItems.reduce((acc, item) => acc + (Number(item.orderedQuantity) * Number(item.unitCost)), 0);
-    const newTotal = itemsTotal + Number(shippingCost) + Number(tax) + Number(otherExpenses);
-    setValue("subtotal", Number(itemsTotal.toFixed(2)));
-    setValue("totalCost", Number(newTotal.toFixed(2)));
-    setValue("balanceDue", Number((newTotal - Number(amountPaid)).toFixed(2)));
-  }, [watchedItems, shippingCost, tax, otherExpenses, amountPaid, setValue]);
-
+    setValue("subtotal", itemsSubtotal);
+    setValue("totalCost", totalCost);
+    setValue("balanceDue", balanceDue);
+  }, [itemsSubtotal, totalCost, balanceDue, setValue]);
 
   // Search/dropdown state for each row
   const [openDropdownIndex, setOpenDropdownIndex] = React.useState<number | null>(null);
@@ -120,10 +129,11 @@ export function PurchaseForm({ initialData, onSuccess }: PurchaseFormProps) {
   }, []);
 
   const handleSelectProduct = (index: number, p: (typeof products)[0]) => {
-    setValue(`items.${index}.productId`, p.id);
-    setValue(`items.${index}.sku`, p.sku);
-    setValue(`items.${index}.name`, p.productName);
-    setValue(`items.${index}.unitCost`, p.costPrice || 0);
+    const opts = { shouldDirty: true, shouldValidate: true };
+    setValue(`items.${index}.productId`, p.id, opts);
+    setValue(`items.${index}.sku`, p.sku, opts);
+    setValue(`items.${index}.name`, p.productName, opts);
+    setValue(`items.${index}.unitCost`, p.costPrice || 0, opts);
     setProductSearch(prev => ({ ...prev, [index]: `${p.productName} (${p.sku})` }));
     setOpenDropdownIndex(null);
   };
@@ -131,104 +141,64 @@ export function PurchaseForm({ initialData, onSuccess }: PurchaseFormProps) {
   // ── SUBMIT ─────────────────────────────────────────────────────────────
   const onSubmit = async (data: PurchaseInput) => {
     if (!user) return;
+    setSubmitError(null);
+    const actor = { userId: user.uid, userDisplayName: user.displayName ?? "System" };
+    const now = Date.now();
 
-    if (initialData) {
-      // ─── EDIT ──────────────────────────────────────────────────────────
-      const oldPurchase = initialData;
-      const wasReceived = oldPurchase.status === "Received";
-      const isNowReceived = data.status === "Received";
+    const items: PurchaseItem[] = data.items.map((i) => ({
+      id: i.id || uuidv4(),
+      productId: i.productId,
+      sku: i.sku,
+      name: i.name,
+      orderedQuantity: Number(i.orderedQuantity) || 0,
+      receivedQuantity: Number(i.receivedQuantity) || 0,
+      unitCost: Number(i.unitCost) || 0,
+    }));
 
-      updatePurchase(oldPurchase.id, { ...data, updatedAt: Date.now(), updatedBy: user.uid } as any);
+    // Recompute totals from the items so a stale form value can never be persisted.
+    const subtotal = round2(items.reduce((acc, i) => acc + i.orderedQuantity * i.unitCost, 0));
+    const shipping = Number(data.shippingCost) || 0;
+    const taxValue = Number(data.tax) || 0;
+    const other = Number(data.otherExpenses) || 0;
+    const paid = Number(data.amountPaid) || 0;
+    const total = round2(subtotal + shipping + taxValue + other);
 
-      if (wasReceived && !isNowReceived) {
-        for (const oldItem of oldPurchase.items) {
-          const fp = products.find(p => p.id === oldItem.productId);
-          if (fp) {
-            await ProductService.updateProduct(
-              fp.id,
-              { quantity: Math.max(0, (fp.quantity || 0) - oldItem.orderedQuantity) },
-              user.uid, user.displayName ?? "System"
-            );
-          }
-        }
-      } else if (!wasReceived && isNowReceived) {
-        for (const newItem of data.items) {
-          const fp = products.find(p => p.id === newItem.productId);
-          if (fp) {
-            await ProductService.updateProduct(
-              fp.id,
-              { 
-                quantity: (fp.quantity || 0) + newItem.orderedQuantity,
-                costPrice: newItem.unitCost
-              },
-              user.uid, user.displayName ?? "System"
-            );
-          }
-        }
-      } else if (wasReceived && isNowReceived) {
-        for (const oldItem of oldPurchase.items) {
-          const fp = products.find(p => p.id === oldItem.productId);
-          if (fp) {
-            await ProductService.updateProduct(
-              fp.id,
-              { quantity: Math.max(0, (fp.quantity || 0) - oldItem.orderedQuantity) },
-              user.uid, user.displayName ?? "System"
-            );
-          }
-        }
-        for (const newItem of data.items) {
-          const fp = products.find(p => p.id === newItem.productId);
-          if (fp) {
-            const oldQty = oldPurchase.items.find(i => i.productId === newItem.productId)?.orderedQuantity || 0;
-            const diff = newItem.orderedQuantity - oldQty;
-            
-            await ProductService.updateProduct(
-              fp.id,
-              { 
-                quantity: Math.max(0, (fp.quantity || 0) + diff),
-                costPrice: newItem.unitCost
-              },
-              user.uid, user.displayName ?? "System"
-            );
-          }
-        }
-      }
-    } else {
-      // ─── CREATE ────────────────────────────────────────────────────────
-      const newPurchase: Purchase = {
-        ...data,
-        id: uuidv4(),
-        items: data.items.map(i => ({...i, id: i.id || uuidv4()})),
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        createdBy: user.uid,
-        updatedBy: user.uid,
-      };
-      addPurchase(newPurchase);
+    const base: Purchase = {
+      ...data,
+      id: initialData?.id ?? uuidv4(),
+      items,
+      subtotal,
+      shippingCost: shipping,
+      tax: taxValue,
+      otherExpenses: other,
+      totalCost: total,
+      amountPaid: paid,
+      balanceDue: round2(total - paid),
+      createdAt: initialData?.createdAt ?? now,
+      createdBy: initialData?.createdBy ?? user.uid,
+      updatedAt: now,
+      updatedBy: user.uid,
+    };
 
-      if (data.status === "Received") {
-        for (const item of data.items) {
-          const fp = products.find(p => p.id === item.productId);
-          if (fp) {
-            await ProductService.updateProduct(
-              fp.id,
-              { 
-                quantity: (fp.quantity || 0) + item.orderedQuantity,
-                costPrice: item.unitCost
-              },
-              user.uid, user.displayName ?? "System"
-            );
-          }
-        }
-      }
+    try {
+      const saved = initialData
+        ? await PurchaseService.updatePurchaseAtomic(base, actor)
+        : await PurchaseService.createPurchaseAtomic(base, actor);
+
+      // The purchases list reads from the local store (display cache); mirror the saved doc.
+      if (initialData) updatePurchase(saved.id, saved);
+      else addPurchase(saved);
+
+      queryClient.invalidateQueries({ queryKey: PRODUCT_QUERY_KEYS.all });
+      queryClient.invalidateQueries({ queryKey: ["inventoryMovements"] });
+      onSuccess();
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : t("purchases.form.saveFailed"));
     }
-
-    queryClient.invalidateQueries({ queryKey: PRODUCT_QUERY_KEYS.all });
-    onSuccess();
   };
 
   return (
-    <form onSubmit={handleSubmit(onSubmit as any)} className="space-y-8">
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-8">
       <section className="space-y-4">
         <h3 className="text-lg font-semibold border-b pb-2">
           {initialData ? t("purchases.form.editTitle") : t("purchases.form.createTitle")}
@@ -261,6 +231,11 @@ export function PurchaseForm({ initialData, onSuccess }: PurchaseFormProps) {
               <option value="Received">✅ {t("purchases.statuses.Received")}</option>
               <option value="Cancelled">❌ {t("purchases.statuses.Cancelled")}</option>
             </select>
+            <p className="text-xs text-muted-foreground mt-1">
+              {watchedStatus === "Received"
+                ? t("purchases.form.receivedHint")
+                : t("purchases.form.notReceivedHint")}
+            </p>
           </div>
         </div>
       </section>
@@ -274,7 +249,7 @@ export function PurchaseForm({ initialData, onSuccess }: PurchaseFormProps) {
             className="flex items-center gap-1 text-sm bg-primary/10 text-primary hover:bg-primary/20 px-3 py-1.5 rounded-md transition-colors"
           >
             <Plus size={16} />
-            إضافة صنف
+            {t("purchases.form.addItem")}
           </button>
         </div>
         
@@ -388,17 +363,32 @@ export function PurchaseForm({ initialData, onSuccess }: PurchaseFormProps) {
             </div>
           </div>
 
-          <div className="md:col-span-2 flex flex-col justify-center p-6 bg-primary/5 rounded-lg border border-primary/20 items-center">
-            <p className="text-sm text-muted-foreground mb-1">{t("purchases.form.totalPurchaseCost")}</p>
-            <div className="text-5xl font-bold tracking-tight text-primary">
-              {Number(totalCost || 0).toFixed(2)} {currency}
+          <div className="md:col-span-2 flex flex-col justify-center p-6 bg-primary/5 rounded-lg border border-primary/20 gap-2">
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">{t("purchases.form.itemsTotal", { count: totalUnits })}</span>
+              <span className="font-medium">{itemsSubtotal.toFixed(2)} {currency}</span>
             </div>
-            <p className="text-xs text-muted-foreground mt-2 text-center">
-              Items ({watchedItems.reduce((acc, item) => acc + (Number(item.orderedQuantity) || 0), 0)} Total) + Shipping + Tax + Expenses
-            </p>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">{t("purchases.form.shipping")}</span>
+              <span className="font-medium">{shippingCost.toFixed(2)} {currency}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">{t("purchases.form.taxAndOther")}</span>
+              <span className="font-medium">{(tax + otherExpenses).toFixed(2)} {currency}</span>
+            </div>
+            <div className="flex justify-between items-end border-t border-primary/20 pt-3">
+              <span className="text-sm text-muted-foreground">{t("purchases.form.totalPurchaseCost")}</span>
+              <span className="text-4xl font-bold tracking-tight text-primary">{totalCost.toFixed(2)} {currency}</span>
+            </div>
           </div>
         </div>
       </section>
+
+      {submitError && (
+        <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          {submitError}
+        </div>
+      )}
 
       <div className="flex justify-end gap-3 pt-4 border-t">
         <button type="button" onClick={onSuccess}

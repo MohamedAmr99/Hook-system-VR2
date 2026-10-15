@@ -49,6 +49,11 @@ export const productSchema = z.object({
     .int("Reserved quantity must be an integer")
     .min(0, "Reserved quantity cannot be negative")
     .default(0),
+  unavailableQuantity: z.coerce
+    .number()
+    .int("Unavailable quantity must be an integer")
+    .min(0, "Unavailable quantity cannot be negative")
+    .optional(),
   minimumStockAlert: z.coerce
     .number()
     .int("Stock alert must be an integer")

@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "hook-system",
     "public": "dist",
     "ignore": [
       "firebase.json",

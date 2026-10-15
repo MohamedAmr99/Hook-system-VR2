@@ -1,11 +1,68 @@
 import { db } from "@/lib/firebase/config";
-import { doc, runTransaction } from "firebase/firestore";
-import { Order } from "../types/order.types";
+import { collection, doc, getDocs, query, runTransaction, where } from "firebase/firestore";
+import { Order, OrderStatus } from "../types/order.types";
 import { Product } from "@/features/products/types";
 import { ActivityService } from "@/shared/services/activity.service";
+import { orderHasReturn, validateOrderStatusChange } from "@/shared/utils/orderCalculations";
 
 const ORDERS_COLLECTION = "orders";
 const PRODUCTS_COLLECTION = "products";
+const RETURNS_COLLECTION = "returns";
+
+/**
+ * Reads the return documents of an order. Must run BEFORE a transaction (queries are not
+ * allowed inside client transactions). Only used as a fallback for legacy orders that do not
+ * carry the denormalized `returnCount`/`hasReturn` yet.
+ */
+async function fetchReturnRefs(orderId: string): Promise<{ id: string; orderId: string }[]> {
+  const snap = await getDocs(query(collection(db, RETURNS_COLLECTION), where("orderId", "==", orderId)));
+  return snap.docs.map((d) => ({ id: d.id, orderId }));
+}
+
+/** Decides whether the fresh order doc has a return, using the legacy query only when no flag exists. */
+function freshOrderHasReturn(
+  fresh: Order,
+  legacyReturns: { id: string; orderId: string }[],
+): boolean {
+  const flagDefined = typeof fresh.returnCount === "number" || typeof fresh.hasReturn === "boolean";
+  return orderHasReturn(fresh, flagDefined ? [] : legacyReturns);
+}
+
+interface ChangeOrderStatusParams {
+  orderId: string;
+  newStatus: OrderStatus;
+  userId: string;
+}
+
+/**
+ * Guarded status change: reads the order in a transaction and rejects the change when the
+ * order has a return. Stock side effects (cancel/reactivate) stay with the caller and must run
+ * only after this resolves. Returns the status that was stored before the change.
+ */
+export async function changeOrderStatusAtomic({
+  orderId,
+  newStatus,
+  userId,
+}: ChangeOrderStatusParams): Promise<OrderStatus> {
+  const legacyReturns = await fetchReturnRefs(orderId);
+  return runTransaction(db, async (transaction) => {
+    const orderRef = doc(db, ORDERS_COLLECTION, orderId);
+    const snap = await transaction.get(orderRef);
+    if (!snap.exists()) {
+      throw new Error("الطلب غير موجود");
+    }
+    const fresh = { ...(snap.data() as Order), id: orderId };
+    const error = validateOrderStatusChange({
+      currentStatus: fresh.status,
+      nextStatus: newStatus,
+      hasReturn: freshOrderHasReturn(fresh, legacyReturns),
+    });
+    if (error) throw new Error(error);
+
+    transaction.update(orderRef, { status: newStatus, updatedAt: Date.now(), updatedBy: userId });
+    return fresh.status;
+  });
+}
 
 interface CreateOrderAtomicParams {
   order: Order;
@@ -96,7 +153,21 @@ export async function updateOrderAtomic({
   userId,
   userDisplayName,
 }: UpdateOrderAtomicParams): Promise<void> {
+  const legacyReturns = await fetchReturnRefs(updatedOrder.id);
   await runTransaction(db, async (transaction) => {
+    // Guard first (all reads happen before writes): reject a changed status for orders with a return.
+    const orderRef = doc(db, ORDERS_COLLECTION, updatedOrder.id);
+    const orderSnap = await transaction.get(orderRef);
+    if (orderSnap.exists()) {
+      const fresh = { ...(orderSnap.data() as Order), id: updatedOrder.id };
+      const error = validateOrderStatusChange({
+        currentStatus: fresh.status,
+        nextStatus: updatedOrder.status,
+        hasReturn: freshOrderHasReturn(fresh, legacyReturns),
+      });
+      if (error) throw new Error(error);
+    }
+
     // Map old item quantities by productId
     const oldQtyMap = new Map<string, number>();
     (oldOrder.items || []).forEach((item) => {
@@ -155,10 +226,13 @@ export async function updateOrderAtomic({
       });
     }
 
-    // Update order doc
-    const orderRef = doc(db, ORDERS_COLLECTION, updatedOrder.id);
+    // Update order doc. Return counters are owned by ReturnService: never overwrite them
+    // with the (possibly stale) client copy.
+    const editableFields: Partial<Order> = { ...updatedOrder };
+    delete editableFields.returnCount;
+    delete editableFields.hasReturn;
     transaction.update(orderRef, {
-      ...updatedOrder,
+      ...editableFields,
       updatedAt: Date.now(),
       updatedBy: userId,
     });
@@ -238,11 +312,11 @@ export async function onOrderDeleted(
 
 export async function syncOrderStock(
   order: Order,
-  products?: Product[],
-  oldStatus?: OrderStatus,
-  newStatus?: OrderStatus,
+  _products?: Product[],
+  _oldStatus?: OrderStatus,
+  _newStatus?: OrderStatus,
   userId?: string,
-  userDisplayName?: string,
+  _userDisplayName?: string,
   oldCondition?: string,
   newCondition?: string,
 ): Promise<void> {

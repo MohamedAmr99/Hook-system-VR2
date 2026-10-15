@@ -176,6 +176,7 @@
       "RejectedByBuyer": "Rejected by Buyer"
     },
     "currency": "EGP",
+    "statusLockedByReturn": "The status of an order with a return cannot be changed",
     "deleteConfirm": "Are you sure you want to delete this order? Stock will be reversed.",
     "editOrder": "Edit Order",
     "deleteOrder": "Delete Order",
@@ -280,6 +281,9 @@
     }
   },
   "purchases": {
+    "statusChangeFailed": "Failed to change purchase status",
+    "deleteFailed": "Failed to delete the purchase",
+    "viewDetails": "View details",
     "title": "Purchases",
     "subtitle": "Track your wholesale purchases and inventory inbound shipments.",
     "newPurchase": "New Purchase",
@@ -303,6 +307,13 @@
       "Cancelled": "Cancelled"
     },
     "form": {
+      "saveFailed": "Failed to save the purchase",
+      "receivedHint": "Quantities will be added to stock and the average cost updated on save.",
+      "notReceivedHint": "Stock is only added when the status is \"Received\".",
+      "addItem": "Add item",
+      "itemsTotal": "Items total ({{count}} units)",
+      "shipping": "Shipping",
+      "taxAndOther": "Tax / other expenses",
       "createTitle": "New Purchase",
       "editTitle": "Edit Purchase",
       "supplierName": "Supplier Name *",
@@ -404,6 +415,89 @@
       "save": "Save Expense",
       "cancel": "Cancel",
       "saving": "Saving..."
+    }
+  },
+  "settlements": {
+    "openButton": "Settlement reconciliation",
+    "title": "Amazon settlement reconciliation",
+    "subtitle": "Compare what the system expects with what Amazon actually paid, and explain every difference by cause.",
+    "upload": {
+      "hint": "Drop the transactions file here or click to choose",
+      "formats": "Arabic \"Transactions for statement period\" CSV from Seller Central"
+    },
+    "parsing": "Reading and matching the file...",
+    "saving": "Saving...",
+    "noLines": "The file has no valid rows.",
+    "actions": {
+      "confirm": "Confirm and save",
+      "export": "Export CSV",
+      "cancel": "Cancel",
+      "close": "Close",
+      "done": "Done"
+    },
+    "summary": {
+      "statementTotal": "Statement total (this file)",
+      "expected": "Expected in system",
+      "actual": "Actually received",
+      "diff": "Difference",
+      "lines": "{{count}} rows",
+      "priorLines": "Includes {{count}} rows from earlier statements"
+    },
+    "causes": {
+      "missing_in_system": "In statement, not in system",
+      "not_in_sheet_yet": "Not paid yet / not in statement",
+      "price_mismatch": "Price mismatch",
+      "fee_mismatch": "Amazon fee mismatch",
+      "shipping_credit": "Shipping credit difference",
+      "easy_ship_fee": "Easy Ship fee not recorded",
+      "cancellation_fee": "Cancellation fee",
+      "refund_without_return": "Refund without a return document",
+      "refund_mismatch": "Refund amount mismatch",
+      "refund_fee_retained": "Fee retained on refund",
+      "safet_claim": "SAFE-T compensation vs recorded",
+      "other": "Other transactions",
+      "platform_level": "Account-level fees (advertising)"
+    },
+    "match": {
+      "matched": "Matched to order",
+      "missing_in_system": "Missing in system",
+      "not_in_sheet": "Not in statement"
+    },
+    "status": {
+      "Settled": "Settled",
+      "PartiallySettled": "Partially settled",
+      "Disputed": "Disputed",
+      "none": "Unchanged"
+    },
+    "table": {
+      "cause": "Cause",
+      "count": "Orders",
+      "amount": "Amount",
+      "allCauses": "All causes",
+      "orderId": "Order ID",
+      "match": "Match",
+      "expected": "Expected",
+      "actual": "Actual",
+      "diff": "Difference",
+      "causes": "Causes",
+      "status": "Financial status"
+    },
+    "errors": {
+      "row": "Row {{row}}",
+      "summary": "{{errors}} rows skipped, {{warnings}} warnings",
+      "empty_file": "The file is empty",
+      "missing_columns": "Required columns not found ({{detail}}). Make sure this is Amazon's Arabic transactions file.",
+      "invalid_date": "Invalid date",
+      "invalid_total": "Invalid total",
+      "invalid_number": "Invalid number in column {{detail}} (treated as zero)",
+      "components_do_not_match_total": "Columns do not add up to the total",
+      "not_authenticated": "Please sign in first"
+    },
+    "result": {
+      "title": "Settlement saved",
+      "savedLines": "Saved {{count}} rows (re-importing never duplicates)",
+      "updatedOrders": "Updated the financial status of {{count}} orders",
+      "missingOrders": "{{count}} orders were not found in the database and were not updated"
     }
   }
 }

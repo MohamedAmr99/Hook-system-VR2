@@ -331,8 +331,8 @@ export function ReturnsPage() {
                     icon: null,
                     cls: "bg-muted text-foreground",
                   };
-                  const caseMeta = CASE_STATUS_LABELS[r.caseStatus] ?? {
-                    label: r.caseStatus,
+                  const caseMeta = (r.caseStatus ? CASE_STATUS_LABELS[r.caseStatus] : undefined) ?? {
+                    label: r.caseStatus ?? "",
                     cls: "",
                   };
                   

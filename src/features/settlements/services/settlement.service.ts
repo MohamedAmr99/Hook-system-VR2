@@ -1,60 +1,69 @@
-import { SettlementRecord } from "../types/settlement.types";
+import type { Order } from "@/features/orders/types/order.types";
+import type { Return } from "@/features/returns/types/return.types";
+import type {
+  OrderSettlementUpdate,
+  ReconciliationReport,
+  SettlementLine,
+  StatementParseResult,
+} from "../types/settlement.types";
 import { settlementRepository } from "../repositories/settlement.repository";
-import { AmazonParserService } from "./amazonParser.service";
-import { useStore } from "@/shared/store/useStore";
+import { parseAmazonStatementCsv } from "../parsers/amazonStatementCsv.parser";
+import { buildOrderSettlementUpdates, reconcileSettlement, sumLineTotals } from "./reconcile.logic";
+
+export interface SettlementPreview {
+  parse: StatementParseResult;
+  report: ReconciliationReport;
+  /** Sum of the "الإجمالي" column of this file only. */
+  statementTotal: number;
+  /** Lines from earlier imports merged into the reconciliation (not re-saved). */
+  priorLineCount: number;
+}
+
+export interface SettlementImportOutcome {
+  savedLines: number;
+  updates: OrderSettlementUpdate[];
+  updatedOrderIds: string[];
+  missingOrderIds: string[];
+}
 
 export class SettlementService {
+  /** Parse + reconcile. Reads earlier stored lines for the same orders; performs no writes. */
+  static async previewAmazonStatement(
+    csvText: string,
+    ctx: { orders: readonly Order[]; returns: readonly Return[]; userId: string },
+  ): Promise<SettlementPreview> {
+    const parse = parseAmazonStatementCsv(csvText, { importedBy: ctx.userId, importedAt: Date.now() });
+
+    let prior: SettlementLine[] = [];
+    if (parse.lines.length > 0) {
+      const orderIds = parse.lines.map((l) => l.platformOrderId).filter((id): id is string => Boolean(id));
+      const currentIds = new Set(parse.lines.map((l) => l.id));
+      prior = (await settlementRepository.getLinesByOrderIds(orderIds)).filter((l) => !currentIds.has(l.id));
+    }
+
+    const report = reconcileSettlement({
+      lines: [...parse.lines, ...prior],
+      orders: ctx.orders,
+      returns: ctx.returns,
+      platform: "Amazon",
+      notInSheetWindow: parse.period ? { from: parse.period.from, to: parse.period.to } : undefined,
+    });
+
+    return { parse, report, statementTotal: sumLineTotals(parse.lines), priorLineCount: prior.length };
+  }
+
   /**
-   * Processes a raw settlement TSV string.
-   * Parses it, stores raw records in Firestore, and updates matching Orders in Zustand store.
+   * Saves lines under deterministic ids (idempotent), then writes financialStatus / actualPayout /
+   * settledAt on matched orders. Never touches stock and never overwrites netPayoutExpected.
    */
-  static async importAmazonSettlement(tsvData: string, userId: string): Promise<{ matched: number, total: number }> {
-    // 1. Parse TSV
-    const records = AmazonParserService.parse(tsvData, userId);
-    if (records.length === 0) return { matched: 0, total: 0 };
-
-    // 2. Save raw records to DB
-    // We should probably chunk this if it's very large, but Firebase writeBatch can handle up to 500 ops.
-    const CHUNK_SIZE = 450;
-    for (let i = 0; i < records.length; i += CHUNK_SIZE) {
-      const chunk = records.slice(i, i + CHUNK_SIZE);
-      await settlementRepository.createBatch(chunk);
+  static async confirmAmazonStatement(preview: SettlementPreview, userId: string): Promise<SettlementImportOutcome> {
+    if (!preview.parse.period || preview.parse.lines.length === 0) {
+      return { savedLines: 0, updates: [], updatedOrderIds: [], missingOrderIds: [] };
     }
-
-    // 3. Reconcile with Orders
-    // We only care about transaction types like 'Order' or 'Refund' that link to an order id.
-    const { orders, updateOrder } = useStore.getState();
-    let matchedCount = 0;
-
-    // Group records by order id to calculate total settlement per order
-    const recordsByOrder: Record<string, SettlementRecord[]> = {};
-    for (const record of records) {
-      if (record.platformOrderId) {
-        if (!recordsByOrder[record.platformOrderId]) recordsByOrder[record.platformOrderId] = [];
-        recordsByOrder[record.platformOrderId].push(record as SettlementRecord);
-      }
-    }
-
-    for (const [platformOrderId, orderRecords] of Object.entries(recordsByOrder)) {
-      const order = orders.find(o => o.platformOrderId === platformOrderId);
-      if (order) {
-        // Calculate the actual settled amount for this order from the report
-        const totalSettled = orderRecords.reduce((sum, r) => sum + r.total, 0);
-
-        // Update the order
-        updateOrder(order.id, {
-          financialStatus: "Settled",
-          netPayoutExpected: totalSettled,
-          updatedAt: Date.now(),
-          updatedBy: userId
-        });
-        matchedCount++;
-      }
-    }
-
-    return {
-      matched: matchedCount,
-      total: records.length
-    };
+    const savedLines = await settlementRepository.upsertLines(preview.parse.lines);
+    const now = Date.now();
+    const updates = buildOrderSettlementUpdates(preview.report, preview.parse.period.key, now);
+    const { updatedOrderIds, missingOrderIds } = await settlementRepository.applyOrderSettlements(updates, userId, now);
+    return { savedLines, updates, updatedOrderIds, missingOrderIds };
   }
 }

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Trash2, Pencil, Eye } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -5,10 +6,17 @@ import { ColumnDef } from "@tanstack/react-table";
 import { DataTable } from "@/shared/components/DataTable";
 import { Purchase } from "../types/purchase.types";
 import { useStore } from "@/shared/store/useStore";
-import { useProducts, PRODUCT_QUERY_KEYS } from "@/features/products/hooks/useProducts";
+import { PRODUCT_QUERY_KEYS } from "@/features/products/hooks/useProducts";
 import { useAuthStore } from "@/features/auth/store/auth.store";
 import { useQueryClient } from "@tanstack/react-query";
-import { ProductService } from "@/features/products/services/product.service";
+import { PurchaseService, PurchaseMissingError } from "../services/purchase.service";
+
+const NL = String.fromCharCode(10);
+
+const actor = (user: { uid: string; displayName: string | null }) => ({
+  userId: user.uid,
+  userDisplayName: user.displayName ?? "System",
+});
 
 export function PurchaseListPage() {
   const { t } = useTranslation();
@@ -17,61 +25,56 @@ export function PurchaseListPage() {
   const deletePurchase = useStore(state => state.deletePurchase);
   const { user } = useAuthStore();
   const queryClient = useQueryClient();
-  const { data: products = [] } = useProducts();
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const currency = t("orders.currency");
 
-  // ── Status change: sync Firebase stock ──────────────────────────────────
+  // Status change and delete go through PurchaseService: stock + WAC are adjusted atomically
+  // in Firestore (Received adds, leaving Received reverts, delete of Received reverts).
   const handleStatusChange = async (purchase: Purchase, newStatus: Purchase["status"]) => {
-    const oldStatus = purchase.status;
-    if (oldStatus === newStatus) return;
-
-    updatePurchaseStatus(purchase.id, newStatus);
-
-    if (!user) return;
-
-    const wasReceived = oldStatus === "Received";
-    const isNowReceived = newStatus === "Received";
-
-    for (const item of purchase.items) {
-      const fp = products.find(p => p.id === item.productId);
-      if (!fp) continue;
-
-      if (!wasReceived && isNowReceived) {
-        await ProductService.updateProduct(
-          fp.id,
-          { quantity: (fp.quantity || 0) + item.orderedQuantity },
-          user.uid, user.displayName ?? "System"
-        );
-      } else if (wasReceived && !isNowReceived) {
-        await ProductService.updateProduct(
-          fp.id,
-          { quantity: Math.max(0, (fp.quantity || 0) - item.orderedQuantity) },
-          user.uid, user.displayName ?? "System"
-        );
-      }
+    if (purchase.status === newStatus || !user) return;
+    setActionError(null);
+    try {
+      const saved = await PurchaseService.updatePurchaseStatusAtomic(purchase.id, newStatus, actor(user));
+      updatePurchaseStatus(saved.id, saved.status);
+      queryClient.invalidateQueries({ queryKey: PRODUCT_QUERY_KEYS.all });
+      queryClient.invalidateQueries({ queryKey: ["inventoryMovements"] });
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : t("purchases.statusChangeFailed"));
     }
-
-    queryClient.invalidateQueries({ queryKey: PRODUCT_QUERY_KEYS.all });
   };
 
   const handleDelete = async (purchase: Purchase) => {
-    if (!window.confirm(t("orders.deleteConfirm"))) return;
-
-    deletePurchase(purchase.id);
-
-    if (user && purchase.status === "Received") {
-      for (const item of purchase.items) {
-        const fp = products.find(p => p.id === item.productId);
-        if (fp) {
-          await ProductService.updateProduct(
-            fp.id,
-            { quantity: Math.max(0, (fp.quantity || 0) - item.orderedQuantity) },
-            user.uid, user.displayName ?? "System"
+    if (!user || !window.confirm(t("orders.deleteConfirm"))) return;
+    setActionError(null);
+    try {
+      try {
+        await PurchaseService.deletePurchaseAtomic(purchase.id, actor(user));
+      } catch (err) {
+        // Cause (a): order exists only in the local store (never persisted to Firestore).
+        if (!(err instanceof PurchaseMissingError)) throw err;
+        const local = useStore.getState().purchases.find((p) => p.id === purchase.id);
+        if (!local) throw err;
+        if (local.status === "Received") {
+          const lines = local.items.map((i) => `${i.name} × ${i.orderedQuantity}`).join(NL);
+          const ok = window.confirm(
+            [
+              "هذا أمر شراء قديم محفوظ محليًا فقط (غير موجود في قاعدة البيانات).",
+              "سيتم حذفه وخصم كمياته من المخزون:",
+              lines,
+              "",
+              "هل تريد المتابعة؟",
+            ].join(NL),
           );
+          if (!ok) return;
         }
+        await PurchaseService.deletePurchaseAtomic(purchase.id, actor(user), { legacyLocalCopy: local });
       }
+      deletePurchase(purchase.id);
       queryClient.invalidateQueries({ queryKey: PRODUCT_QUERY_KEYS.all });
+      queryClient.invalidateQueries({ queryKey: ["inventoryMovements"] });
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : t("purchases.deleteFailed"));
     }
   };
 
@@ -110,7 +113,7 @@ export function PurchaseListPage() {
         return (
           <select
             value={row.original.status}
-            onChange={(e) => handleStatusChange(row.original, e.target.value as any)}
+            onChange={(e) => handleStatusChange(row.original, e.target.value as Purchase["status"])}
             className={`text-xs font-medium rounded-full px-3 py-1 border cursor-pointer ${colorClass} focus:outline-none`}
           >
             <option value="Draft">📝 Draft</option>
@@ -154,7 +157,7 @@ export function PurchaseListPage() {
           <Link
             to={`/purchases/${row.original.id}/view`}
             className="p-2 text-primary hover:bg-primary/10 rounded-md transition-colors"
-            title="عرض التفاصيل"
+            title={t("purchases.viewDetails")}
           >
             <Eye size={16} />
           </Link>
@@ -185,6 +188,12 @@ export function PurchaseListPage() {
 
   return (
     <div className="space-y-6">
+      {actionError && (
+        <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          {actionError}
+        </div>
+      )}
+
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t("purchases.title")}</h1>
